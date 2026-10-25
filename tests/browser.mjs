@@ -1,0 +1,31 @@
+import {createServer} from 'node:http';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {extname,resolve} from 'node:path';
+import assert from 'node:assert/strict';
+import {control} from '../core.js';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const root=fileURLToPath(new URL('../',import.meta.url));
+const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.md':'text/plain'};
+const server=createServer(async(req,res)=>{try{const path=resolve(root,'.'+decodeURIComponent(req.url.split('?')[0]==='/'?'/index.html':req.url.split('?')[0]));if(!path.startsWith(root))throw Error('outside');const data=await readFile(path);res.writeHead(200,{'content-type':types[extname(path)]||'application/octet-stream'});res.end(data);}catch{res.writeHead(404);res.end('Not found');}});
+await new Promise(r=>server.listen(0,'127.0.0.1',r));const local=`http://127.0.0.1:${server.address().port}`;
+const url=process.env.TEST_URL||local;
+const browser=await chromium.launch({channel:'chrome',headless:true});
+const errors=[],checks=[];const collect=page=>{page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});};
+try{
+const page=await browser.newPage({viewport:{width:1440,height:1100}});collect(page);await page.goto(url);await page.waitForFunction(()=>!!window.labSnapshot);
+const initial=await page.evaluate(()=>window.labSnapshot);assert.equal(initial.generation,0);checks.push('初期集団と実測値を表示');
+await page.click('#once');assert.equal(await page.evaluate(()=>window.labSnapshot.generation),1);checks.push('一世代実行');
+await page.click('#train');await page.waitForFunction(()=>window.labSnapshot.generation>=12);await page.click('#train');const stopped=await page.evaluate(()=>window.labSnapshot);await page.waitForTimeout(500);assert.equal(await page.evaluate(()=>window.labSnapshot.generation),stopped.generation);checks.push('学習開始・停止（停止後世代不変）');await page.waitForTimeout(40);const live=await page.evaluate(()=>({snapshot:window.labSnapshot,turn:document.getElementById('turn').textContent,weight:document.getElementById('weight').textContent}));const expected=control(live.snapshot.flightState,live.snapshot.obstacles,live.snapshot.flightGenome);assert.equal(live.turn,expected.turn.toFixed(2));assert.equal(live.weight,expected.weight.toFixed(2));checks.push('ライブ中間出力がリプレイ個体の制御計算と一致');
+const rect=await page.locator('#world').boundingBox();const point=(x,y)=>({x:rect.x+x/900*rect.width,y:rect.y+y/540*rect.height});const a=point(245,255),b=point(130,270);await page.mouse.move(a.x,a.y);await page.mouse.down();await page.mouse.move(b.x,b.y,{steps:10});await page.mouse.up();let snap=await page.evaluate(()=>window.labSnapshot);assert.ok(snap.changed);assert.ok(Math.abs(snap.obstacles[0].x-130)<2);assert.deepEqual(snap.best,stopped.best);assert.match(await page.locator('#eval-score').innerText(),/0 \/ 3/);assert.match(await page.locator('#train-score').innerText(),/3 \/ 3/);checks.push('ドラッグ配置変更・遺伝子は不変・未知配置0/3と学習配置3/3を区別');await page.waitForFunction(()=>document.getElementById('flight-status').textContent.includes('衝突'));
+await page.screenshot({path:resolve(root,'artifacts/changed-layout-failure.png'),fullPage:true});
+await page.click('#restore');assert.equal(await page.evaluate(()=>window.labSnapshot.changed),false);checks.push('学習配置に復元');await page.waitForFunction(()=>window.labSnapshot.flightStep>=90);await page.screenshot({path:resolve(root,'artifacts/desktop.png'),fullPage:true});
+await page.click('#reset');assert.deepEqual(await page.evaluate(()=>window.labSnapshot.best),initial.best);assert.equal(await page.evaluate(()=>window.labSnapshot.generation),0);checks.push('seed初期化で初期個体を再現');
+await page.click('#seed');await page.fill('#seed','browser-repeat');await page.click('#reset');for(let i=0;i<3;i++)await page.click('#once');const repeat=await page.evaluate(()=>window.labSnapshot.history);await page.click('#reset');for(let i=0;i<3;i++)await page.click('#once');assert.deepEqual(await page.evaluate(()=>window.labSnapshot.history),repeat);checks.push('ブラウザ上でも同seedの進化を再現');
+await page.click('#replay');await page.waitForTimeout(100);assert.match(await page.locator('#flight-status').innerText(),/世代3/);assert.equal(await page.evaluate(()=>window.labSnapshot.flightGeneration),3);checks.push('リプレイ更新・表示世代と飛行個体を固定');
+const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:2});collect(mobile);await mobile.goto(url);await mobile.waitForFunction(()=>!!window.labSnapshot);await mobile.locator('#world').scrollIntoViewIfNeeded();let mr=await mobile.locator('#world').boundingBox();const mp=(x,y)=>({x:mr.x+x/900*mr.width,y:mr.y+y/540*mr.height});let m1=mp(245,255),m2=mp(320,180);await mobile.touchscreen.tap(m1.x,m1.y);await mobile.touchscreen.tap(m2.x,m2.y);const ms=await mobile.evaluate(()=>window.labSnapshot);assert.ok(ms.changed);assert.ok(Math.abs(ms.obstacles[0].x-320)<5);assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);checks.push('390pxスマホ・タップ配置変更・横溢れなし');
+await mobile.click('#once');assert.equal(await mobile.evaluate(()=>window.labSnapshot.generation),1);checks.push('スマホ学習操作');
+await mobile.waitForFunction(()=>window.labSnapshot.flightStep>=60);await mobile.screenshot({path:resolve(root,'artifacts/mobile.png'),fullPage:true});
+assert.deepEqual(errors,[]);checks.push('console error / pageerror 0件');
+const result={url,checks,stoppedGeneration:stopped.generation,initial:initial.history[0],trained:stopped.history.at(-1),errors};await writeFile(resolve(root,'artifacts/browser-results.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+}finally{await browser.close();await new Promise(r=>server.close(r));}
