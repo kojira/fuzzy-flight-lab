@@ -1,0 +1,7 @@
+import {Evolution,evaluate,INITIAL,WORLD,HEADINGS} from '../core.js';
+import {writeFile} from 'node:fs/promises';
+const seeds=['ALPHA-2016','test',...Array.from({length:18},(_,i)=>`flight-${i+1}`)];
+const results=[];
+for(const method of ['gft','nn'])for(const seed of seeds){const e=new Evolution(seed,24,method);const before=evaluate(e.initialBest,INITIAL,method);for(let i=0;i<80;i++)e.advance();const after=evaluate(e.best,INITIAL,method);results.push({method,seed,before,at35:e.history[35],after,firstFullGeneration:e.history.find(x=>x.goals===3)?.generation??null,history:e.history});}
+const summary=['gft','nn'].map(method=>{const r=results.filter(x=>x.method===method);return {method,seeds:r.length,initialFull:r.filter(x=>x.before.goals===3).length,fullAt35:r.filter(x=>x.at35.goals===3).length,fullAt80:r.filter(x=>x.after.goals===3).length,totalAfterGoals:r.reduce((s,x)=>s+x.after.goals,0),totalCases:r.length*3,unresolved:r.filter(x=>x.after.goals<3).map(x=>({seed:x.seed,beforeGoals:x.before.goals,afterGoals:x.after.goals,beforeScore:x.before.score,afterScore:x.after.score})),noScoreImprovement:r.filter(x=>x.after.score<=x.before.score).map(x=>x.seed)};});
+await writeFile(new URL('../artifacts/nn-multi-seed.json',import.meta.url),JSON.stringify({conditions:{maxSteps:WORLD.maxSteps,population:24,generations:80,headings:HEADINGS,layout:INITIAL,samePhysics:true,sameGenerationNotSameCompute:true},summary,results},null,2));console.log(JSON.stringify(summary,null,2));

@@ -67,3 +67,11 @@
 - 詳細JSON: `artifacts/multi-seed.json` / `artifacts/regression-negative.json` / `artifacts/local-browser-results.json`。スクリーンショット: `artifacts/initial-unsolved.png` / `artifacts/comparison-trained.png` / `artifacts/mobile.png` / `artifacts/changed-layout-failure.png`。
 
 Pages本番で同じChrome検査を再実行し、配信JSとローカルの一致を照合する。最終結果は `artifacts/production-browser-results.json` / `artifacts/pages-verification.json` に保存。
+
+
+## GFT / NN切替改訂の検証
+Node 15テスト成功。NNの重み付き和・バイアス・tanh/sigmoid・入力一致・有限出力・実物理・seed再現・GA演算・初期最良保存を検証。Labの方式別seed/RNG/状態/リセット独立を検証。
+同じ20seedを両方式80世代まで実測。GFT全到達20/20seed（60/60ケース）、NN16/20seed（50/60ケース）。35世代ではNN15/20seed。NNのflight-2/3/6は80世代でも0/3、flight-9は2/3。全seed得点改善、ただし到達を保証しない。条件・全seed初期/学習後・履歴は `artifacts/nn-multi-seed.json`。
+既存GFT Chrome回帰に加え、NN Chrome検証で実LIVE入力・全隠れ層・全出力・旋回/速度、軌跡を独立Node計算と比較。両方式の切替・開始・停止・世代/seed保持・リセット独立・前後比較・変更評価配置の失敗・390pxタッチ・横溢れなしを検査。console/page error 0。実機ではなくChromeのタッチエミュレーション。
+負例5種（NN重み付き和破壊、切替状態消失、NNの物理呼び出しをGFTへ変更、LIVE旋回偽値、リセットが別方式を破棄）はすべてfail。NN物理負例が最初は同じstep関数同士の比較だけでは検出できなかったため、nnControlから独立算出する次位置・向きとの照合を追加してfailを確認。復元後15テスト成功。
+証拠: `artifacts/nn-negative-results.json` / `nn-core-tests.txt` / `nn-local-browser-results.json`。画像: `nn-trained.png` / `nn-changed-layout.png` / `nn-mobile.png`。Pages配信後に既存GFT回帰とNN検証を再実行し、配信ファイルのSHA-256も比較する。

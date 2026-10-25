@@ -1,0 +1,44 @@
+import {createServer} from 'node:http';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {extname,resolve} from 'node:path';
+import assert from 'node:assert/strict';
+import {control,episode,HEADINGS} from '../core.js';
+const samePath=(a,b)=>{assert.equal(a.length,b.length);a.forEach((p,i)=>{assert.equal(p.status,b[i].status);for(const k of ['x','y','heading'])assert.ok(Math.abs(p[k]-b[i][k])<1e-7,`${k}: browser/Node difference`);});};
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const root=fileURLToPath(new URL('../',import.meta.url));
+const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.md':'text/plain'};
+const server=createServer(async(req,res)=>{try{const path=resolve(root,'.'+decodeURIComponent(req.url.split('?')[0]==='/'?'/index.html':req.url.split('?')[0]));if(!path.startsWith(root))throw Error('outside');const data=await readFile(path);res.writeHead(200,{'content-type':types[extname(path)]||'application/octet-stream'});res.end(data);}catch{res.writeHead(404);res.end('Not found');}});
+await new Promise(r=>server.listen(0,'127.0.0.1',r));const local=`http://127.0.0.1:${server.address().port}`;
+const url=process.env.TEST_URL||local;
+const browser=await chromium.launch({channel:'chrome',headless:true});
+const errors=[],checks=[];const collect=page=>{page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});};
+try{
+const page=await browser.newPage({viewport:{width:1440,height:1100}});collect(page);await page.goto(url);await page.waitForFunction(()=>!!window.labSnapshot);
+const snap=()=>page.evaluate(()=>window.labSnapshot);
+const initialGft=await snap();await page.click('#once');const gft=await snap();
+await page.selectOption('#method','nn');const initialNN=await snap();assert.equal(initialNN.method,'nn');assert.equal(initialNN.generation,0);assert.equal(initialNN.best.length,45);assert.notDeepEqual(initialNN.best,initialGft.best);assert.equal(await page.locator('#gft-panel').isVisible(),false);assert.equal(await page.locator('#nn-panel').isVisible(),true);checks.push('NN切替・45遺伝子の独立初期集団・GFTパネル非表示');
+async function liveCheck(){
+  const live=await page.evaluate(()=>({snapshot:window.labSnapshot,inputs:[...document.querySelectorAll('#nn-inputs output')].map(x=>x.textContent),hidden:[...document.querySelectorAll('#nn-hidden output')].map(x=>x.textContent),outputs:[...document.querySelectorAll('#nn-outputs output')].map(x=>x.textContent),turn:document.getElementById('nn-turn').textContent,speed:document.getElementById('nn-speed').textContent}));
+  const s=live.snapshot,c=control(s.flightState,s.obstacles,s.flightGenome,'nn');
+  assert.deepEqual(live.inputs,c.inputs.map(x=>x.toFixed(2)));assert.deepEqual(live.hidden,c.hidden.map(x=>x.toFixed(2)));assert.deepEqual(live.outputs,c.outputs.map(x=>x.toFixed(2)));assert.equal(live.turn,c.turn.toFixed(2));assert.equal(live.speed,c.speed.toFixed(2));
+}
+await page.waitForTimeout(50);await liveCheck();checks.push('NN LIVE実入力・全隠れ層・出力・旋回/速度が実制御に一致');
+await page.screenshot({path:resolve(root,'artifacts/nn-initial.png'),fullPage:true});
+await page.click('#train');await page.waitForFunction(()=>window.labSnapshot.generation>=35,{},{timeout:30000});await page.click('#train');const trained=await snap();await page.waitForTimeout(400);assert.equal((await snap()).generation,trained.generation);assert.equal(trained.trainingBefore.goals,0);assert.equal(trained.trainingAfter.goals,3);assert.ok(trained.trainingAfter.score>trained.trainingBefore.score);assert.deepEqual(trained.initialBest,initialNN.initialBest);checks.push('NN実GA学習開始→35世代以上→停止・0/3→3/3の実測比較・初期最良保持');
+await page.click('#replay');await page.waitForTimeout(50);await liveCheck();const replay=await snap();samePath(replay.currentPath,episode(replay.best,replay.obstacles,0,true,'nn').path);samePath(replay.baselinePath,episode(replay.initialBest,replay.obstacles,0,true,'nn').path);await page.screenshot({path:resolve(root,'artifacts/nn-trained.png'),fullPage:true});checks.push('NN軌跡はNode実制御の現在/初期結果と一致');
+await page.selectOption('#case','2');const right=await snap();samePath(right.currentPath,episode(right.flightGenome,right.obstacles,HEADINGS[2],true,'nn').path);await page.selectOption('#case','1');
+await page.selectOption('#method','gft');let back=await snap();assert.equal(back.generation,gft.generation);assert.deepEqual(back.best,gft.best);assert.deepEqual(back.initialBest,gft.initialBest);assert.deepEqual(back.history,gft.history);assert.equal(await page.locator('#gft-panel').isVisible(),true);assert.equal(await page.locator('#nn-panel').isVisible(),false);
+await page.selectOption('#method','nn');back=await snap();assert.equal(back.generation,trained.generation);assert.deepEqual(back.best,trained.best);assert.deepEqual(back.history,trained.history);checks.push('両方式を往復しても世代・現在最良・初期最良・履歴を混同しない');
+const rect=await page.locator('#world').boundingBox(),point=(x,y)=>({x:rect.x+x/900*rect.width,y:rect.y+y/540*rect.height});const a=point(245,255),b=point(80,270);await page.mouse.move(a.x,a.y);await page.mouse.down();await page.mouse.move(b.x,b.y,{steps:8});await page.mouse.up();const changed=await snap();assert.equal(changed.changed,true);assert.deepEqual(changed.best,trained.best);assert.equal(changed.trainingAfter.goals,3);assert.equal(changed.evaluationAfter.goals,0);checks.push('NN配置変更は学習不変・学習3/3と評価0/3を区別');await page.screenshot({path:resolve(root,'artifacts/nn-changed-layout.png'),fullPage:true});
+await page.selectOption('#method','gft');assert.equal((await snap()).changed,true);await page.selectOption('#method','nn');await page.click('#reset');const reset=await snap();assert.equal(reset.generation,0);assert.equal(reset.changed,false);assert.deepEqual(reset.best,initialNN.best);await page.selectOption('#method','gft');assert.deepEqual((await snap()).best,gft.best);assert.equal((await snap()).generation,1);checks.push('NNリセットは同seed再現・配置復元・GFTを保持');
+await page.selectOption('#method','nn');await page.fill('#seed','NN-browser-repeat');await page.click('#reset');for(let i=0;i<3;i++)await page.click('#once');const repeat=await snap();await page.selectOption('#method','gft');assert.equal(await page.inputValue('#seed'),'ALPHA-2016');await page.selectOption('#method','nn');assert.equal(await page.inputValue('#seed'),'NN-browser-repeat');await page.click('#reset');for(let i=0;i<3;i++)await page.click('#once');assert.deepEqual((await snap()).history,repeat.history);checks.push('NN seed再現と方式別seed入力の復元');
+await page.click('#train');await page.waitForFunction(()=>window.labSnapshot.generation>=4);await page.selectOption('#method','gft');assert.equal((await snap()).learning,false);const stoppedG=await snap();await page.waitForTimeout(300);assert.equal((await snap()).generation,stoppedG.generation);checks.push('学習中の方式切替は停止し、別方式を勝手に学習しない');
+const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:2});collect(mobile);await mobile.goto(url);await mobile.waitForFunction(()=>!!window.labSnapshot);
+for(const method of ['gft','nn']){
+ await mobile.selectOption('#method',method);await mobile.click('#train');await mobile.waitForFunction(()=>window.labSnapshot.generation>=2);await mobile.click('#train');const state=await mobile.evaluate(()=>window.labSnapshot);await mobile.waitForTimeout(200);assert.equal((await mobile.evaluate(()=>window.labSnapshot)).generation,state.generation);await mobile.click('#reset');assert.equal((await mobile.evaluate(()=>window.labSnapshot)).generation,0);
+ await mobile.locator('#world').scrollIntoViewIfNeeded();const mr=await mobile.locator('#world').boundingBox(),p=(x,y)=>({x:mr.x+x/900*mr.width,y:mr.y+y/540*mr.height});const m1=p(245,255),m2=p(320,180);await mobile.touchscreen.tap(m1.x,m1.y);await mobile.touchscreen.tap(m2.x,m2.y);const s=await mobile.evaluate(()=>window.labSnapshot);assert.ok(s.changed);assert.ok(Math.abs(s.obstacles[0].x-320)<5);assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await mobile.screenshot({path:resolve(root,`artifacts/${method}-mobile.png`),fullPage:true});await mobile.click('#restore');assert.equal((await mobile.evaluate(()=>window.labSnapshot)).changed,false);
+}checks.push('390pxタッチ：両方式で切替→学習→停止→リセット→タップ配置変更→復元、横溢れなし');
+assert.deepEqual(errors,[]);checks.push('Chrome console error / pageerror 0');
+const result={url,checks,errors,nn:{initial:initialNN.trainingBefore,trained:trained.trainingAfter,generation:trained.generation},gftPreservedGeneration:gft.generation};await writeFile(resolve(root,`artifacts/${process.env.TEST_URL?'nn-production':'nn-local'}-browser-results.json`),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+}finally{await browser.close();await new Promise(r=>server.close(r));}

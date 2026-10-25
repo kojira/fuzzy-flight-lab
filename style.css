@@ -5,3 +5,5 @@
 .compare-controls input[type=checkbox]{width:18px;height:18px;min-height:18px;padding:0;vertical-align:middle;accent-color:#b491f4}.compare-controls label{display:inline-flex;align-items:center;gap:6px}
 
 .mission{color:#afc6dd;font-size:13px;line-height:1.8;margin:0 0 18px;padding:0 4px}
+
+[hidden]{display:none!important}.controls>select{max-width:100%;padding:.6rem;background:#14263b;color:#e7f2ff;border:1px solid #36516b;border-radius:8px}.controls>label{font-weight:700}.controls>#method-state{white-space:normal}#nn-panel .bar-row label{min-width:95px}#nn-panel .bar-row{grid-template-columns:110px 1fr 46px}
