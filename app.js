@@ -54,7 +54,7 @@ function draw(){
 let lastGeneration=0;
 function frame(t){
   if(learning&&!drag&&t-lastGeneration>150){lastGeneration=t;evo.advance();metrics();if(!playing)replay();}
-  if(playing&&(!lastFrame||t-lastFrame>=25)&&!drag){index=Math.min(index+2,flight.path.length-1);lastFrame=t;if(index>=flight.path.length-1)playing=false;}
+  if(playing&&(!lastFrame||t-lastFrame>=25)&&!drag){index=Math.min(index+2,flight.path.length-1);lastFrame=t;if(index>=flight.path.length-1){playing=false;if(flightGeneration!==evo.generation)replay();}}
   draw();requestAnimationFrame(frame);
 }
 // Read-only snapshot for automated checks; no control bypass.
