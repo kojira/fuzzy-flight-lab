@@ -1,7 +1,7 @@
-import {WORLD,INITIAL,LABELS,Evolution,control,episode,evaluate,clamp} from './core.js';
+import {WORLD,INITIAL,HEADINGS,LABELS,Evolution,control,episode,evaluate,clamp} from './core.js';
 const $=id=>document.getElementById(id);
 const canvas=$('world'),ctx=canvas.getContext('2d'),chart=$('chart'),cc=chart.getContext('2d');
-let evo,obstacles,playing=false,learning=false,flight,flightGenome,flightGeneration,index=0,lastFrame=0,selected=-1,drag=null,changed=false;
+let evo,obstacles,playing=false,learning=false,flight,baselineFlight,flightGenome,flightGeneration,index=0,lastFrame=0,selected=-1,drag=null,changed=false;
 const copyLayout=()=>INITIAL.map(o=>({...o}));
 const statusText={running:'飛行中',goal:'ゴール到達！',collision:'衝突',timeout:'時間切れ'};
 const bars=(id,labels)=>$(id).innerHTML=labels.map((s,i)=>`<div class="bar-row"><label>${s}</label><div class="bar-track"><div class="bar-fill" id="${id}-${i}"></div></div><output id="${id}-n-${i}">0.00</output></div>`).join('');
@@ -22,13 +22,16 @@ function metrics(){
   const a=evaluate(evo.best,INITIAL),b=evaluate(evo.best,obstacles);
   $('generation').textContent=evo.generation;
   for(const [prefix,r] of [['train',a],['eval',b]]){$(`${prefix}-score`).textContent=`${r.goals} / 3 到達`;$(`${prefix}-detail`).textContent=`平均 ${r.score.toFixed(1)} 点 · 衝突 ${r.collisions} 回`;}
+  const format=r=>`${r.goals} / 3 到達 · 平均 ${r.score.toFixed(1)} 点 · 衝突 ${r.collisions} · 時間切れ ${r.runs.filter(v=>v.status==='timeout').length}`;
+  $('comparison').innerHTML=[['固定した学習配置',INITIAL,'training'],['いまの評価配置',obstacles,'evaluation']].map(([label,layout,id])=>`<article><h3>${label}</h3><p class="before" id="${id}-before">学習前（世代0）：${format(evaluate(evo.initialBest,layout))}</p><p class="after" id="${id}-after">学習後（世代${evo.generation}）：${format(evaluate(evo.best,layout))}</p></article>`).join('');
   $('genes').innerHTML=evo.best.map((v,i)=>`<span>${LABELS[i]}：${v.toFixed(2)}</span>`).join('');
   $('layout-state').textContent=changed?'変更した評価配置（学習には使いません）':'学習と同じ配置';
   drawChart();
 }
-function replay(){flightGenome=evo.best.slice();flightGeneration=evo.generation;flight=episode(flightGenome,obstacles,0,true);index=0;playing=true;lastFrame=0;}
+function replay(){flightGenome=evo.best.slice();flightGeneration=evo.generation;flight=episode(flightGenome,obstacles,HEADINGS[Number($('case').value)],true);baselineFlight=episode(evo.initialBest,obstacles,HEADINGS[Number($('case').value)],true);index=0;playing=true;lastFrame=0;}
 function setLearning(value){learning=value;$('train').textContent=value?'■ 学習ストップ':'▶ 学習スタート';$('once').disabled=value;$('activity').textContent=value?'進化中：固定した学習配置で選択・交叉・突然変異を実行。いつでも止められます。':`停止中：世代 ${evo.generation}。障害物を動かして、未知配置を試そう。`;}
 function reset(){evo=new Evolution($('seed').value||'ALPHA-2016');setLearning(false);obstacles=copyLayout();changed=false;selected=-1;metrics();replay();$('activity').textContent='seedから初期集団を再生成しました。世代0の実測成績です。';}
+$('case').addEventListener('change',replay);
 $('train').addEventListener('click',()=>setLearning(!learning));
 $('once').addEventListener('click',()=>{evo.advance();metrics();replay();$('activity').textContent=`世代 ${evo.generation} を評価しました。実測値を更新。`;});
 $('reset').addEventListener('click',reset);$('replay').addEventListener('click',replay);
@@ -46,7 +49,8 @@ function draw(){
   ctx.lineWidth=2;ctx.strokeStyle='#65845b';ctx.setLineDash([5,6]);ctx.beginPath();ctx.arc(WORLD.goal.x,WORLD.goal.y,35,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#7de59b30';ctx.beginPath();ctx.arc(WORLD.goal.x,WORLD.goal.y,WORLD.goal.r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#b1efb9';ctx.font='bold 12px system-ui';ctx.fillText('GOAL',WORLD.goal.x-17,WORLD.goal.y+4);ctx.fillStyle='#819bb7';ctx.fillText('START',35,320);
   if(changed){ctx.strokeStyle='#3e5a73';ctx.setLineDash([4,6]);for(const o of INITIAL){ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,Math.PI*2);ctx.stroke();}ctx.setLineDash([]);}
   obstacles.forEach((o,i)=>{ctx.fillStyle=i===selected?'#b87c493a':'#ffac701d';ctx.strokeStyle=i===selected?'#ffd2a8':'#e4a16b';ctx.lineWidth=i===selected?3:1.5;ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#d8aa88';ctx.font='12px system-ui';ctx.fillText(String(i+1),o.x-3,o.y+4);});
-  ctx.strokeStyle='#55e1d696';ctx.lineWidth=2;ctx.beginPath();for(let i=0;i<=index&&i<flight.path.length;i++){const p=flight.path[i];i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);}ctx.stroke();
+  function pathLine(run,color,dashed){ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.setLineDash(dashed?[7,5]:[]);ctx.beginPath();run.path.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();ctx.setLineDash([]);const end=run.path.at(-1);ctx.fillStyle=color;ctx.beginPath();ctx.arc(end.x,end.y,5,0,Math.PI*2);ctx.fill();}
+  if($('baseline').checked)pathLine(baselineFlight,'#c4a1ff',true);pathLine(flight,'#55e1d6',false);
   const c=updateTree(s);if(!drag){c.distance.forEach((d,i)=>{const a=s.heading+(i-1)*flightGenome[4];ctx.strokeStyle=`rgba(85,225,214,${.15+c.memberships[i]*.6})`;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(s.x+Math.cos(a)*d,s.y+Math.sin(a)*d);ctx.stroke();});}
   ctx.save();ctx.translate(s.x,s.y);ctx.rotate(s.heading);ctx.fillStyle=s.status==='collision'?'#ff867d':'#55e1d6';ctx.shadowBlur=14;ctx.shadowColor='#55e1d6';ctx.beginPath();ctx.moveTo(15,0);ctx.lineTo(-10,-9);ctx.lineTo(-6,0);ctx.lineTo(-10,9);ctx.closePath();ctx.fill();ctx.restore();
   $('flight-status').textContent=`世代${flightGeneration} · ${statusText[s.status]} · ${s.steps} step`;
@@ -58,5 +62,5 @@ function frame(t){
   draw();requestAnimationFrame(frame);
 }
 // Read-only snapshot for automated checks; no control bypass.
-Object.defineProperty(window,'labSnapshot',{get:()=>({generation:evo.generation,learning,changed,obstacles:obstacles.map(o=>({...o})),best:evo.best.slice(),history:evo.history.map(p=>({...p})),flightStatus:flight.status,flightGeneration,flightGenome:flightGenome.slice(),flightStep:flight.path[Math.min(index,flight.path.length-1)].steps,flightState:{...flight.path[Math.min(index,flight.path.length-1)]}})});
+Object.defineProperty(window,'labSnapshot',{get:()=>({generation:evo.generation,learning,changed,obstacles:obstacles.map(o=>({...o})),best:evo.best.slice(),history:evo.history.map(p=>({...p})),flightStatus:flight.status,flightGeneration,flightGenome:flightGenome.slice(),initialBest:evo.initialBest.slice(),trainingBefore:evaluate(evo.initialBest,INITIAL),trainingAfter:evaluate(evo.best,INITIAL),evaluationBefore:evaluate(evo.initialBest,obstacles),evaluationAfter:evaluate(evo.best,obstacles),caseIndex:Number($('case').value),baselineStatus:baselineFlight.status,baselinePath:baselineFlight.path.map(p=>({...p})),currentPath:flight.path.map(p=>({...p})),baselineVisible:$('baseline').checked,flightStep:flight.path[Math.min(index,flight.path.length-1)].steps,flightState:{...flight.path[Math.min(index,flight.path.length-1)]}})});
 reset();requestAnimationFrame(frame);

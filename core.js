@@ -1,7 +1,8 @@
 // Deterministic simulation: no DOM, network, or clock dependency.
-export const WORLD = { w: 900, h: 540, radius: 9, start: {x:65,y:270}, goal: {x:835,y:270,r:24}, maxSteps: 580 };
+export const WORLD = { w: 900, h: 540, radius: 9, start: {x:65,y:270}, goal: {x:835,y:270,r:24}, maxSteps: 270 };
 export const INITIAL = [{x:245,y:255,r:55},{x:425,y:145,r:58},{x:455,y:365,r:64},{x:635,y:260,r:60},{x:705,y:445,r:35}];
 export const RANGES = [[85,235],[.65,2.8],[.8,3.4],[.6,2.6],[.38,1.18],[-.65,.65],[1.5,3.5]];
+export const HEADINGS = [-.18,0,.18];
 export const LABELS = ['近い距離','ゴール誘導','回避強度','回避優先','センサー角','左右バイアス','巡航速度'];
 export const clamp = (v,a=0,b=1) => Math.max(a,Math.min(b,v));
 export function rng(seed) { let h=2166136261; for (const c of String(seed)) {h^=c.charCodeAt(0);h=Math.imul(h,16777619);} return () => {h+=0x6D2B79F5;let t=h;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296;}; }
@@ -59,13 +60,13 @@ export function episode(g,obstacles,heading=0,trace=false){
   const score=progress*180+(s.status==='goal'?420:0)-(s.status==='collision'?100:0)-s.steps*.06;
   return {score,status:s.status,steps:s.steps,path};
 }
-export function evaluate(g,obstacles){const runs=[-.18,0,.18].map(h=>episode(g,obstacles,h));return {score:runs.reduce((a,r)=>a+r.score,0)/runs.length,goals:runs.filter(r=>r.status==='goal').length,collisions:runs.filter(r=>r.status==='collision').length,runs};}
+export function evaluate(g,obstacles){const runs=HEADINGS.map(h=>episode(g,obstacles,h));return {score:runs.reduce((a,r)=>a+r.score,0)/runs.length,goals:runs.filter(r=>r.status==='goal').length,collisions:runs.filter(r=>r.status==='collision').length,runs};}
 export const randomGenome = random => RANGES.map(([lo,hi])=>lo+random()*(hi-lo));
 export function tournament(ranked,random){let best=null;for(let i=0;i<3;i++){const p=ranked[Math.floor(random()*ranked.length)];if(!best||p.fitness>best.fitness)best=p;}return best;}
 export function crossover(a,b,random){return a.map((v,i)=>{const t=random();return v*t+b[i]*(1-t);});}
 export function mutate(g,random,rate=.23){return g.map((v,i)=>{const [lo,hi]=RANGES[i];return random()<rate?clamp(v+(random()*2-1)*(hi-lo)*.22,lo,hi):v;});}
 export class Evolution {
-  constructor(seed='ALPHA-2016',size=24){this.random=rng(seed);this.size=size;this.generation=0;this.population=Array.from({length:size},()=>randomGenome(this.random));this.history=[];this.assess();}
+  constructor(seed='ALPHA-2016',size=24){this.random=rng(seed);this.size=size;this.generation=0;this.population=Array.from({length:size},()=>randomGenome(this.random));this.history=[];this.assess();this.initialBest=this.best.slice();}
   assess(){this.ranked=this.population.map(genome=>({genome,fitness:evaluate(genome,INITIAL).score})).sort((a,b)=>b.fitness-a.fitness);this.best=this.ranked[0].genome.slice();const result=evaluate(this.best,INITIAL);this.history.push({generation:this.generation,score:result.score,goals:result.goals});return result;}
   advance(){const next=this.ranked.slice(0,2).map(p=>p.genome.slice());while(next.length<this.size){next.push(mutate(crossover(tournament(this.ranked,this.random).genome,tournament(this.ranked,this.random).genome,this.random),this.random));}this.population=next;this.generation++;return this.assess();}
 }
